@@ -1,20 +1,17 @@
 // ==UserScript==
 // @name         GCP Gemini API Key Automation Suite
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Automates project creation and Gemini API key extraction for GCP/AI Studio.
 // @author       Sisyphus/Claude
-// @match        *://*.console.cloud.google.com/*
-// @match        *://*.aistudio.google.com/*
-// @match        *://console.cloud.google.com/*
-// @match        *://aistudio.google.com/*
-// @include      *://console.cloud.google.com/*
-// @include      *://aistudio.google.com/*
+// @match        *://*.google.com/*
+// @include      *://*.google.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
+// @grant        GM_registerMenuCommand
 // @connect      cloudresourcemanager.googleapis.com
 // @connect      serviceusage.googleapis.com
 // @run-at       document-idle
@@ -22,6 +19,10 @@
 
 (function() {
     'use strict';
+
+    // Only run on the specific subdomains we care about
+    const allowedHosts = ['console.cloud.google.com', 'aistudio.google.com'];
+    if (!allowedHosts.some(host => location.host.includes(host))) return;
 
     // --- State Management ---
     const Store = {
@@ -172,17 +173,39 @@
         root: null,
         shadow: null,
         elements: {},
+        isInitialized: false,
         
         init() {
+            if (this.isInitialized) return;
+            
+            // Register Tampermonkey menu command as a fallback
+            try {
+                GM_registerMenuCommand("Show Gemini Automation Panel", () => this.forceInjectAndOpen());
+            } catch (e) {}
+
+            // Add keyboard shortcut (Ctrl+Shift+G)
+            document.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
+                    e.preventDefault();
+                    this.forceInjectAndOpen();
+                }
+            });
+
             // Very aggressive body check
             const inject = () => {
-                if (document.getElementById('gemini-suite-root')) return;
-                if (!document.body) {
+                if (document.getElementById('gemini-suite-root')) {
+                    this.isInitialized = true;
+                    return;
+                }
+                
+                const target = document.body || document.documentElement;
+                if (!target) {
                     requestAnimationFrame(inject);
                     return;
                 }
                 
-                this.createRoot();
+                this.isInitialized = true;
+                this.createRoot(target);
                 this.injectStyles();
                 this.createFAB();
                 this.createPanel();
@@ -191,20 +214,41 @@
                 
                 // Always auto-open on console.cloud.google.com
                 if (location.host.includes('console.cloud.google.com')) {
-                    setTimeout(() => this.togglePanel(), 500);
+                    setTimeout(() => {
+                        this.elements.panel.classList.add('open');
+                        this.elements.fab.style.display = 'none';
+                    }, 500);
                 }
 
-                if (location.host === 'aistudio.google.com') {
+                if (location.host.includes('aistudio.google.com')) {
                     this.handleAIStudio();
                 }
             };
             inject();
         },
 
-        createRoot() {
+        forceInjectAndOpen() {
+            if (!this.isInitialized || !document.getElementById('gemini-suite-root')) {
+                const target = document.body || document.documentElement;
+                if (target) {
+                    this.createRoot(target);
+                    this.injectStyles();
+                    this.createFAB();
+                    this.createPanel();
+                    this.bindEvents();
+                    this.isInitialized = true;
+                }
+            }
+            if (this.elements.panel) {
+                this.elements.panel.classList.add('open');
+                if (this.elements.fab) this.elements.fab.style.display = 'none';
+            }
+        },
+
+        createRoot(targetNode) {
             const root = document.createElement('div');
             root.id = 'gemini-suite-root';
-            document.body.appendChild(root);
+            targetNode.appendChild(root);
             this.root = root;
             this.shadow = root.attachShadow({ mode: 'open' });
         },
@@ -427,7 +471,14 @@
 
         togglePanel() {
             const p = this.elements.panel;
-            p.classList.toggle('open');
+            const fab = this.elements.fab;
+            if (p.classList.contains('open')) {
+                p.classList.remove('open');
+                fab.style.display = 'flex';
+            } else {
+                p.classList.add('open');
+                fab.style.display = 'none';
+            }
         },
 
         refreshLog() {
