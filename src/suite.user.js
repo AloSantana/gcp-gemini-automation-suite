@@ -37,7 +37,6 @@
     let BEARER_TOKEN = null;
     const OriginalFetch = window.fetch;
     window.fetch = async function(...args) {
-        const url = args[0]?.toString() || '';
         const options = args[1] || {};
         
         // Capture token from any Authorization header
@@ -171,16 +170,25 @@
         elements: {},
         
         init() {
-            this.injectStyles();
-            this.createFAB();
-            this.createPanel();
-            this.bindEvents();
-            Store.addLog('Suite Initialized');
-            
-            // Auto-check for AI Studio automation
-            if (location.host === 'aistudio.google.com') {
-                this.handleAIStudio();
-            }
+            // Wait for body to be ready
+            const bodyCheck = setInterval(() => {
+                if (document.body) {
+                    clearInterval(bodyCheck);
+                    this.injectStyles();
+                    this.createFAB();
+                    this.createPanel();
+                    this.bindEvents();
+                    Store.addLog('Suite Initialized');
+                    
+                    // Auto Pop-Up
+                    setTimeout(() => this.togglePanel(), 1000);
+
+                    // Auto-check for AI Studio automation
+                    if (location.host === 'aistudio.google.com') {
+                        this.handleAIStudio();
+                    }
+                }
+            }, 100);
         },
 
         bindEvents() {
@@ -269,52 +277,126 @@
         },
 
         injectStyles() {
-            GM_addStyle(`
+            const css = `
                 #gemini-suite-fab {
                     position: fixed; bottom: 20px; right: 20px; width: 56px; height: 56px;
                     background: #1a73e8; border-radius: 50%; display: flex; align-items: center;
-                    justify-content: center; color: white; cursor: pointer; z-index: 999999;
+                    justify-content: center; color: white; cursor: pointer; z-index: 2147483647;
                     box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 24px; user-select: none;
-                    touch-action: none;
+                    touch-action: none; transition: transform 0.2s;
                 }
+                #gemini-suite-fab:active { transform: scale(0.95); }
+                
                 #gemini-suite-panel {
-                    position: fixed; bottom: 0; right: 0; width: 100%; max-width: 400px;
-                    height: 70vh; background: #202124; color: #e8eaed; z-index: 999998;
-                    display: none; flex-direction: column; border-top-left-radius: 16px;
-                    border-top-right-radius: 16px; box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
-                    transition: transform 0.3s ease; font-family: 'Roboto', sans-serif;
+                    position: fixed; background: #202124; color: #e8eaed; z-index: 2147483646;
+                    display: flex; flex-direction: column; box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+                    transition: transform 0.3s ease-in-out; font-family: 'Roboto', sans-serif;
+                    visibility: hidden; pointer-events: none;
                 }
-                @media (min-width: 600px) {
-                    #gemini-suite-panel { bottom: 80px; right: 20px; height: 500px; border-radius: 12px; }
+                
+                /* Mobile: Slide-up Bottom Sheet */
+                @media (max-width: 768px) {
+                    #gemini-suite-panel {
+                        bottom: 0; left: 0; right: 0; height: 70vh;
+                        border-top-left-radius: 16px; border-top-right-radius: 16px;
+                        transform: translateY(100%);
+                    }
+                    #gemini-suite-panel.open { transform: translateY(0); visibility: visible; pointer-events: auto; }
                 }
+                
+                /* Desktop: Side Panel */
+                @media (min-width: 769px) {
+                    #gemini-suite-panel {
+                        top: 0; right: 0; bottom: 0; width: 400px;
+                        border-left: 1px solid #3c4043;
+                        transform: translateX(100%);
+                    }
+                    #gemini-suite-panel.open { transform: translateX(0); visibility: visible; pointer-events: auto; }
+                }
+                
                 .panel-header { padding: 16px; border-bottom: 1px solid #3c4043; display: flex; justify-content: space-between; align-items: center; }
+                .panel-header h2 { margin: 0; font-size: 18px; }
                 .panel-content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-                .status-log { flex: 1; background: #000; color: #0f0; font-family: monospace; padding: 8px; font-size: 12px; border-radius: 4px; overflow-y: auto; margin-top: 12px; }
-                .action-btn { background: #1a73e8; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; min-height: 48px; }
+                .status-log { flex: 1; background: #000; color: #0f0; font-family: monospace; padding: 8px; font-size: 12px; border-radius: 4px; overflow-y: auto; margin-top: 12px; min-height: 150px; word-wrap: break-word; }
+                .action-btn { background: #1a73e8; color: white; border: none; padding: 0 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; min-height: 48px; display: flex; align-items: center; justify-content: center; }
+                .action-btn:active { background: #1557b0; }
                 .action-btn:disabled { background: #3c4043; cursor: not-allowed; }
-                .close-btn { cursor: pointer; font-size: 20px; padding: 4px; }
-            `);
+                .close-btn { cursor: pointer; font-size: 24px; min-width: 48px; min-height: 48px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: #e8eaed; }
+            `;
+            try {
+                GM_addStyle(css);
+            } catch (e) {
+                const style = document.createElement('style');
+                style.textContent = css;
+                document.head.appendChild(style);
+            }
         },
 
         createFAB() {
             const fab = document.createElement('div');
             fab.id = 'gemini-suite-fab';
             fab.innerHTML = '💎';
-            fab.onclick = () => this.togglePanel();
             
-            // Basic Draggable (Mobile friendly)
             let isDragging = false;
-            fab.ontouchstart = (e) => { isDragging = false; };
-            fab.ontouchmove = (e) => {
+            let isMoved = false;
+            let startX, startY, initialLeft, initialTop;
+
+            const dragStart = (e) => {
+                if (e.target !== fab) return;
+                if (e.type === 'touchstart') {
+                    startX = e.touches[0].clientX;
+                    startY = e.touches[0].clientY;
+                } else {
+                    startX = e.clientX;
+                    startY = e.clientY;
+                }
+                const rect = fab.getBoundingClientRect();
+                initialLeft = rect.left;
+                initialTop = rect.top;
                 isDragging = true;
-                const touch = e.touches[0];
-                const x = Math.min(Math.max(0, touch.clientX - 28), window.innerWidth - 56);
-                const y = Math.min(Math.max(0, touch.clientY - 28), window.innerHeight - 56);
-                fab.style.left = x + 'px';
-                fab.style.top = y + 'px';
+                isMoved = false;
                 fab.style.right = 'auto';
                 fab.style.bottom = 'auto';
+                fab.style.left = initialLeft + 'px';
+                fab.style.top = initialTop + 'px';
             };
+
+            const dragEnd = () => {
+                if (!isDragging) return;
+                isDragging = false;
+                if (!isMoved) {
+                    this.togglePanel();
+                }
+            };
+
+            const drag = (e) => {
+                if (!isDragging) return;
+                let currentX, currentY;
+                if (e.type === 'touchmove') {
+                    currentX = e.touches[0].clientX;
+                    currentY = e.touches[0].clientY;
+                } else {
+                    currentX = e.clientX;
+                    currentY = e.clientY;
+                }
+                const dx = currentX - startX;
+                const dy = currentY - startY;
+                if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                    isMoved = true;
+                }
+                if (isMoved) {
+                    e.preventDefault();
+                    fab.style.left = (initialLeft + dx) + 'px';
+                    fab.style.top = (initialTop + dy) + 'px';
+                }
+            };
+
+            fab.addEventListener('touchstart', dragStart, { passive: false });
+            fab.addEventListener('touchend', dragEnd, { passive: false });
+            fab.addEventListener('touchmove', drag, { passive: false });
+            fab.addEventListener('mousedown', dragStart, { passive: false });
+            document.addEventListener('mouseup', dragEnd, { passive: false });
+            document.addEventListener('mousemove', drag, { passive: false });
             
             document.body.appendChild(fab);
             this.elements.fab = fab;
@@ -325,8 +407,8 @@
             panel.id = 'gemini-suite-panel';
             panel.innerHTML = `
                 <div class="panel-header">
-                    <span>Gemini Automation Suite</span>
-                    <span class="close-btn">✕</span>
+                    <h2>Gemini Automation</h2>
+                    <button class="close-btn">✕</button>
                 </div>
                 <div class="panel-content">
                     <button class="action-btn" id="btn-action-1">🚀 Auto-Create 8 Projects</button>
@@ -344,7 +426,7 @@
 
         togglePanel() {
             const p = this.elements.panel;
-            p.style.display = p.style.display === 'flex' ? 'none' : 'flex';
+            p.classList.toggle('open');
         },
 
         refreshLog() {
