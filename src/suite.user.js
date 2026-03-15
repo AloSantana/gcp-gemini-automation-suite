@@ -168,7 +168,7 @@
         }
     };
 
-    // --- UI Implementation (Shadow DOM Enhanced) ---
+    // --- UI Implementation (Shadow DOM + MutationObserver Enhanced) ---
     const UI = {
         root: null,
         shadow: null,
@@ -176,14 +176,12 @@
         isInitialized: false,
         
         init() {
-            if (this.isInitialized) return;
-            
-            // Register Tampermonkey menu command as a fallback
+            // Register Tampermonkey menu command as a manual fallback trigger
             try {
                 GM_registerMenuCommand("Show Gemini Automation Panel", () => this.forceInjectAndOpen());
             } catch (e) {}
 
-            // Add keyboard shortcut (Ctrl+Shift+G)
+            // Add keyboard shortcut (Ctrl+Shift+G) as another fallback
             document.addEventListener('keydown', (e) => {
                 if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
                     e.preventDefault();
@@ -191,54 +189,67 @@
                 }
             });
 
-            // Very aggressive body check
-            const inject = () => {
-                if (document.getElementById('gemini-suite-root')) {
-                    this.isInitialized = true;
-                    return;
-                }
-                
-                const target = document.body || document.documentElement;
-                if (!target) {
-                    requestAnimationFrame(inject);
-                    return;
-                }
-                
-                this.isInitialized = true;
-                this.createRoot(target);
-                this.injectStyles();
-                this.createFAB();
-                this.createPanel();
-                this.bindEvents();
-                Store.addLog('Suite Initialized');
-                
-                // Always auto-open on console.cloud.google.com
-                if (location.host.includes('console.cloud.google.com')) {
-                    setTimeout(() => {
-                        this.elements.panel.classList.add('open');
-                        this.elements.fab.style.display = 'none';
-                    }, 500);
-                }
-
-                if (location.host.includes('aistudio.google.com')) {
-                    this.handleAIStudio();
-                }
-            };
-            inject();
+            // Start the persistent injection observer
+            this.startPersistenceObserver();
         },
 
-        forceInjectAndOpen() {
-            if (!this.isInitialized || !document.getElementById('gemini-suite-root')) {
+        startPersistenceObserver() {
+            const inject = () => {
+                // If it already exists and is attached to the document, do nothing
+                if (document.getElementById('gemini-suite-root')) return;
+                
+                // Find a viable target for injection (body preferred, html fallback)
                 const target = document.body || document.documentElement;
-                if (target) {
-                    this.createRoot(target);
+                if (!target) return; // Still too early
+                
+                this.createRoot(target);
+                
+                // Only bind events and styles once per script run to avoid memory leaks
+                if (!this.isInitialized) {
                     this.injectStyles();
                     this.createFAB();
                     this.createPanel();
                     this.bindEvents();
+                    Store.addLog('Suite Initialized via Observer');
                     this.isInitialized = true;
+
+                    // Auto-open logic (only on first successful initialization)
+                    if (location.host.includes('console.cloud.google.com')) {
+                        setTimeout(() => this.forceInjectAndOpen(), 1000);
+                    }
+                    if (location.host.includes('aistudio.google.com')) {
+                        setTimeout(() => this.handleAIStudio(), 1000);
+                    }
+                } else {
+                    // Re-attaching existing elements to the new root
+                    this.shadow.appendChild(this.styleElement);
+                    this.shadow.appendChild(this.elements.fab);
+                    this.shadow.appendChild(this.elements.panel);
                 }
+            };
+
+            // Run immediately in case DOM is already ready
+            inject();
+
+            // Set up MutationObserver to permanently watch for SPA routing clearing our UI
+            const observer = new MutationObserver(() => inject());
+            
+            // Wait for at least the html tag to exist before observing
+            const waitForRoot = setInterval(() => {
+                if (document.documentElement) {
+                    clearInterval(waitForRoot);
+                    observer.observe(document.documentElement, { childList: true, subtree: true });
+                }
+            }, 100);
+        },
+
+        forceInjectAndOpen() {
+            // Ensure injection if it hasn't happened yet
+            if (!document.getElementById('gemini-suite-root')) {
+                const target = document.body || document.documentElement;
+                if (target) this.createRoot(target);
             }
+            
             if (this.elements.panel) {
                 this.elements.panel.classList.add('open');
                 if (this.elements.fab) this.elements.fab.style.display = 'none';
@@ -310,10 +321,10 @@
             Store.addLog('🏁 AI Studio Automation Finished.');
         },
 
-        async waitForElement(selector, timeout = 5000) {
+        async waitForElement(selector, timeout = 15000) {
             return new Promise((resolve, reject) => {
                 const start = Date.now();
-                const check = () => {
+                const check = async () => {
                     const el = document.querySelector(selector);
                     if (el) return resolve(el);
                     
@@ -326,8 +337,13 @@
                         }
                     }
 
-                    if (Date.now() - start > timeout) reject(new Error(`Timeout waiting for ${selector}`));
-                    else requestAnimationFrame(check);
+                    if (Date.now() - start > timeout) {
+                        reject(new Error(`Timeout waiting for ${selector}`));
+                    } else {
+                        // Delay polling to not freeze browser, matching reference script logic
+                        await new Promise(r => setTimeout(r, 250));
+                        check();
+                    }
                 };
                 check();
             });
