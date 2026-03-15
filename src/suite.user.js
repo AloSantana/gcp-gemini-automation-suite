@@ -1,11 +1,15 @@
 // ==UserScript==
 // @name         GCP Gemini API Key Automation Suite
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.2
 // @description  Automates project creation and Gemini API key extraction for GCP/AI Studio.
 // @author       Sisyphus/Claude
-// @match        https://console.cloud.google.com/*
-// @match        https://aistudio.google.com/*
+// @match        *://*.console.cloud.google.com/*
+// @match        *://*.aistudio.google.com/*
+// @match        *://console.cloud.google.com/*
+// @match        *://aistudio.google.com/*
+// @include      *://console.cloud.google.com/*
+// @include      *://aistudio.google.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
@@ -13,7 +17,7 @@
 // @grant        GM_download
 // @connect      cloudresourcemanager.googleapis.com
 // @connect      serviceusage.googleapis.com
-// @run-at       document-start
+// @run-at       document-idle
 // ==/UserScript==
 
 (function() {
@@ -37,9 +41,9 @@
     let BEARER_TOKEN = null;
     const OriginalFetch = window.fetch;
     window.fetch = async function(...args) {
+        const url = args[0]?.toString() || '';
         const options = args[1] || {};
         
-        // Capture token from any Authorization header
         const authHeader = options.headers?.Authorization || options.headers?.get?.('Authorization');
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split(' ')[1];
@@ -98,13 +102,11 @@
                         body: { projectId, displayName }
                     });
 
-                    // Poll for operation completion
                     const operationId = createRes.name;
                     await this.pollOperation(operationId);
                     
                     Store.addLog(`✅ Project ${projectId} created. Enabling Gemini API...`);
                     
-                    // Enable Gemini API
                     await GCP.fetch(`https://serviceusage.googleapis.com/v1/projects/${projectId}/services/generativelanguage.googleapis.com:enable`, {
                         method: 'POST'
                     });
@@ -112,7 +114,7 @@
                     Store.update(s => s.projects.push({ id: projectId, name: displayName }));
                     Store.addLog(`✨ Project ${i}/8 Complete.`);
                     
-                    await new Promise(r => setTimeout(r, 3000)); // Mobile-friendly delay
+                    await new Promise(r => setTimeout(r, 3000));
                 }
                 Store.addLog('🎉 Action 1 Finished Successfully!');
             } catch (err) {
@@ -165,40 +167,56 @@
         }
     };
 
-    // --- UI Implementation ---
+    // --- UI Implementation (Shadow DOM Enhanced) ---
     const UI = {
+        root: null,
+        shadow: null,
         elements: {},
         
         init() {
-            // Wait for body to be ready
-            const bodyCheck = setInterval(() => {
-                if (document.body) {
-                    clearInterval(bodyCheck);
-                    this.injectStyles();
-                    this.createFAB();
-                    this.createPanel();
-                    this.bindEvents();
-                    Store.addLog('Suite Initialized');
-                    
-                    // Auto Pop-Up
-                    setTimeout(() => this.togglePanel(), 1000);
-
-                    // Auto-check for AI Studio automation
-                    if (location.host === 'aistudio.google.com') {
-                        this.handleAIStudio();
-                    }
+            // Very aggressive body check
+            const inject = () => {
+                if (document.getElementById('gemini-suite-root')) return;
+                if (!document.body) {
+                    requestAnimationFrame(inject);
+                    return;
                 }
-            }, 100);
+                
+                this.createRoot();
+                this.injectStyles();
+                this.createFAB();
+                this.createPanel();
+                this.bindEvents();
+                Store.addLog('Suite Initialized');
+                
+                // Always auto-open on console.cloud.google.com
+                if (location.host.includes('console.cloud.google.com')) {
+                    setTimeout(() => this.togglePanel(), 500);
+                }
+
+                if (location.host === 'aistudio.google.com') {
+                    this.handleAIStudio();
+                }
+            };
+            inject();
+        },
+
+        createRoot() {
+            const root = document.createElement('div');
+            root.id = 'gemini-suite-root';
+            document.body.appendChild(root);
+            this.root = root;
+            this.shadow = root.attachShadow({ mode: 'open' });
         },
 
         bindEvents() {
-            document.getElementById('btn-action-1').onclick = () => Logic.action1();
-            document.getElementById('btn-action-2').onclick = () => Logic.action2();
-            document.getElementById('btn-action-3').onclick = () => Logic.action3();
+            this.shadow.getElementById('btn-action-1').onclick = () => Logic.action1();
+            this.shadow.getElementById('btn-action-2').onclick = () => Logic.action2();
+            this.shadow.getElementById('btn-action-3').onclick = () => Logic.action3();
         },
 
         setLoading(btnId, isLoading) {
-            const btn = document.getElementById(btnId);
+            const btn = this.shadow.getElementById(btnId);
             if (btn) {
                 btn.disabled = isLoading;
                 btn.innerText = isLoading ? '⏳ Processing...' : btn.getAttribute('data-original-text') || btn.innerText;
@@ -217,18 +235,15 @@
                 try {
                     Store.addLog(`🔑 Creating key for ${project.id}...`);
                     
-                    // 1. Click "Create API Key" button
                     const createBtn = await this.waitForElement('[data-testid="create-api-key-button"], button:contains("Create API key")');
                     createBtn.click();
                     
-                    // 2. Select Project from dropdown
                     const dropdown = await this.waitForElement('.project-selection-dropdown, [role="listbox"]');
                     dropdown.click();
                     
                     const projectOption = await this.waitForElement(`.project-option:contains("${project.id}"), [role="option"]:contains("${project.id}")`);
                     projectOption.click();
                     
-                    // 3. Wait for Key generation and scrape
                     const keyElement = await this.waitForElement('.api-key-value, [data-testid="api-key-display"]', 10000);
                     const apiKey = keyElement.innerText.trim();
                     
@@ -239,14 +254,13 @@
                         throw new Error('Invalid key format detected.');
                     }
                     
-                    // Close modal/reset state for next project
                     const closeBtn = document.querySelector('.modal-close-btn, button:contains("Close")');
                     if (closeBtn) closeBtn.click();
                     
                     await new Promise(r => setTimeout(r, 2000));
                 } catch (err) {
                     Store.addLog(`❌ AI Studio Error (${project.id}): ${err.message}`, 'error');
-                    break; // Stop loop on error to prevent infinite loops
+                    break;
                 }
             }
             Store.addLog('🏁 AI Studio Automation Finished.');
@@ -259,7 +273,6 @@
                     const el = document.querySelector(selector);
                     if (el) return resolve(el);
                     
-                    // Text search fallback for non-data-testid elements
                     if (selector.includes(':contains')) {
                         const [base, text] = selector.split(':contains("');
                         const cleanText = text.replace('")', '');
@@ -277,7 +290,8 @@
         },
 
         injectStyles() {
-            const css = `
+            const style = document.createElement('style');
+            style.textContent = `
                 #gemini-suite-fab {
                     position: fixed; bottom: 20px; right: 20px; width: 56px; height: 56px;
                     background: #1a73e8; border-radius: 50%; display: flex; align-items: center;
@@ -294,7 +308,6 @@
                     visibility: hidden; pointer-events: none;
                 }
                 
-                /* Mobile: Slide-up Bottom Sheet */
                 @media (max-width: 768px) {
                     #gemini-suite-panel {
                         bottom: 0; left: 0; right: 0; height: 70vh;
@@ -304,7 +317,6 @@
                     #gemini-suite-panel.open { transform: translateY(0); visibility: visible; pointer-events: auto; }
                 }
                 
-                /* Desktop: Side Panel */
                 @media (min-width: 769px) {
                     #gemini-suite-panel {
                         top: 0; right: 0; bottom: 0; width: 400px;
@@ -315,21 +327,15 @@
                 }
                 
                 .panel-header { padding: 16px; border-bottom: 1px solid #3c4043; display: flex; justify-content: space-between; align-items: center; }
-                .panel-header h2 { margin: 0; font-size: 18px; }
+                .panel-header h2 { margin: 0; font-size: 18px; color: #fff; }
                 .panel-content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-                .status-log { flex: 1; background: #000; color: #0f0; font-family: monospace; padding: 8px; font-size: 12px; border-radius: 4px; overflow-y: auto; margin-top: 12px; min-height: 150px; word-wrap: break-word; }
+                .status-log { flex: 1; background: #000; color: #0f0; font-family: monospace; padding: 8px; font-size: 12px; border-radius: 4px; overflow-y: auto; margin-top: 12px; min-height: 150px; word-wrap: break-word; line-height: 1.4; }
                 .action-btn { background: #1a73e8; color: white; border: none; padding: 0 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; min-height: 48px; display: flex; align-items: center; justify-content: center; }
                 .action-btn:active { background: #1557b0; }
                 .action-btn:disabled { background: #3c4043; cursor: not-allowed; }
                 .close-btn { cursor: pointer; font-size: 24px; min-width: 48px; min-height: 48px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: #e8eaed; }
             `;
-            try {
-                GM_addStyle(css);
-            } catch (e) {
-                const style = document.createElement('style');
-                style.textContent = css;
-                document.head.appendChild(style);
-            }
+            this.shadow.appendChild(style);
         },
 
         createFAB() {
@@ -343,14 +349,12 @@
 
             const dragStart = (e) => {
                 if (e.target !== fab) return;
-                if (e.type === 'touchstart') {
-                    startX = e.touches[0].clientX;
-                    startY = e.touches[0].clientY;
-                } else {
-                    startX = e.clientX;
-                    startY = e.clientY;
-                }
+                const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+                const clientY = e.type === 'touchstart' ? e.touches[0].clientY : e.clientY;
+                
                 const rect = fab.getBoundingClientRect();
+                startX = clientX;
+                startY = clientY;
                 initialLeft = rect.left;
                 initialTop = rect.top;
                 isDragging = true;
@@ -371,23 +375,20 @@
 
             const drag = (e) => {
                 if (!isDragging) return;
-                let currentX, currentY;
-                if (e.type === 'touchmove') {
-                    currentX = e.touches[0].clientX;
-                    currentY = e.touches[0].clientY;
-                } else {
-                    currentX = e.clientX;
-                    currentY = e.clientY;
-                }
-                const dx = currentX - startX;
-                const dy = currentY - startY;
+                const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+                const clientY = e.type === 'touchmove' ? e.touches[0].clientY : e.clientY;
+                
+                const dx = clientX - startX;
+                const dy = clientY - startY;
                 if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
                     isMoved = true;
                 }
                 if (isMoved) {
                     e.preventDefault();
-                    fab.style.left = (initialLeft + dx) + 'px';
-                    fab.style.top = (initialTop + dy) + 'px';
+                    const x = Math.min(Math.max(0, initialLeft + dx), window.innerWidth - 56);
+                    const y = Math.min(Math.max(0, initialTop + dy), window.innerHeight - 56);
+                    fab.style.left = x + 'px';
+                    fab.style.top = y + 'px';
                 }
             };
 
@@ -395,10 +396,10 @@
             fab.addEventListener('touchend', dragEnd, { passive: false });
             fab.addEventListener('touchmove', drag, { passive: false });
             fab.addEventListener('mousedown', dragStart, { passive: false });
-            document.addEventListener('mouseup', dragEnd, { passive: false });
-            document.addEventListener('mousemove', drag, { passive: false });
+            window.addEventListener('mouseup', dragEnd, { passive: false });
+            window.addEventListener('mousemove', drag, { passive: false });
             
-            document.body.appendChild(fab);
+            this.shadow.appendChild(fab);
             this.elements.fab = fab;
         },
 
@@ -408,7 +409,7 @@
             panel.innerHTML = `
                 <div class="panel-header">
                     <h2>Gemini Automation</h2>
-                    <button class="close-btn">✕</button>
+                    <button class="close-btn" id="panel-close-btn">✕</button>
                 </div>
                 <div class="panel-content">
                     <button class="action-btn" id="btn-action-1">🚀 Auto-Create 8 Projects</button>
@@ -417,10 +418,10 @@
                     <div class="status-log" id="suite-log"></div>
                 </div>
             `;
-            document.body.appendChild(panel);
+            this.shadow.appendChild(panel);
             this.elements.panel = panel;
             
-            panel.querySelector('.close-btn').onclick = () => this.togglePanel();
+            this.shadow.getElementById('panel-close-btn').onclick = () => this.togglePanel();
             this.refreshLog();
         },
 
@@ -430,7 +431,7 @@
         },
 
         refreshLog() {
-            const logEl = document.getElementById('suite-log');
+            const logEl = this.shadow.getElementById('suite-log');
             if (logEl) {
                 const logs = Store.get().logs;
                 logEl.innerHTML = logs.map(l => `[${l.timestamp.split('T')[1].split('.')[0]}] ${l.message}`).join('<br>');
@@ -439,11 +440,6 @@
         }
     };
 
-    // Initialize UI on load
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => UI.init());
-    } else {
-        UI.init();
-    }
+    UI.init();
 
 })();
